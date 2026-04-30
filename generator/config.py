@@ -3,9 +3,10 @@
 # ============================================================
 
 from datetime import datetime, timedelta
+import os
 
 # ── Baza de date ─────────────────────────────────────────────
-DB_PATH = "database/banking.db"
+DB_PATH = os.path.join(os.path.dirname(__file__), "..", "database", "banking.db")
 
 # ── Volumul datelor generate (one-shot initial) ──────────────
 NUM_BRANCHES    = 20
@@ -144,5 +145,35 @@ ERROR_RATES = {
 # Total ~8% date invalide pentru demonstrarea Silver quarantine
 
 # ── Scheduler — flux continuu ────────────────────────────────
-SCHEDULER_INTERVAL_MINUTES = 30     # ruleaza la fiecare 30 minute
+SCHEDULER_INTERVAL_MINUTES = 5     # ruleaza la fiecare 5 minute
 SCHEDULER_BATCH_TRANSACTIONS = 50  # tranzactii noi per rulare
+
+# ── Rate actualizari entitati per batch ──────────────────────
+# Procentul din populatia totala care primeste o schimbare per batch
+UPDATE_RATES = {
+    "customers" : 0.05,   # 5%  — segment, KYC, adresa, dezactivare
+    "loans"     : 0.08,   # 8%  — progresie status + reducere sold
+    "cards"     : 0.04,   # 4%  — blocare/deblocare, limita credit
+}
+
+# Tranzitii status credite (stare_curenta -> [(stare_noua, probabilitate)])
+LOAN_TRANSITIONS = {
+    "APPLIED":  [("APPROVED", 0.70), ("REJECTED", 0.30)],
+    "APPROVED": [("ACTIVE",   0.85), ("REJECTED", 0.15)],
+    "ACTIVE":   [("OVERDUE",  0.15), ("CLOSED",   0.10), ("ACTIVE",   0.75)],
+    "OVERDUE":  [("ACTIVE",   0.35), ("CLOSED",   0.35), ("OVERDUE",  0.30)],
+}
+
+# Tranzitii status carduri
+CARD_TRANSITIONS = {
+    "ACTIVE":  [("BLOCKED",   0.20), ("CANCELLED", 0.05), ("ACTIVE",  0.75)],
+    "BLOCKED": [("ACTIVE",    0.60), ("CANCELLED", 0.20), ("BLOCKED", 0.20)],
+    "EXPIRED": [("CANCELLED", 0.80), ("EXPIRED",   0.20)],
+}
+
+# Tranzitii status conturi
+ACCOUNT_TRANSITIONS = {
+    "ACTIVE":  [("FROZEN", 0.02), ("BLOCKED", 0.02), ("CLOSED", 0.01), ("ACTIVE", 0.95)],
+    "FROZEN":  [("ACTIVE", 0.60), ("BLOCKED", 0.10), ("FROZEN", 0.30)],
+    "BLOCKED": [("ACTIVE", 0.40), ("CLOSED",  0.20), ("BLOCKED", 0.40)],
+}

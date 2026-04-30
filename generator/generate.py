@@ -160,30 +160,51 @@ def generate_employees(conn, branch_ids, n=NUM_EMPLOYEES):
 def generate_customers(conn, n=NUM_CUSTOMERS):
     logger.info(f"Generare {n} clienti...")
 
-    counties = [r[0] for r in conn.execute("SELECT county_code FROM ref_counties").fetchall()]
-    rows     = []
-    cnp_set  = set()   # pentru unicitate CNP
+    # Luam EXACT codurile din DB — nu presupunem nimic
+    counties = [r[0] for r in conn.execute(
+        "SELECT county_code FROM ref_counties WHERE is_active=1"
+    ).fetchall()]
+    
+    valid_segments = [r[0] for r in conn.execute(
+        "SELECT segment_code FROM ref_customer_segments"
+    ).fetchall()]
+    
+    valid_kyc = [r[0] for r in conn.execute(
+        "SELECT status_code FROM ref_kyc_statuses"
+    ).fetchall()]
+
+    rows    = []
+    cnp_set = set()
 
     for i in range(1, n + 1):
         gender     = random.choice(["M", "F"])
         dob        = fake.date_of_birth(minimum_age=18, maximum_age=80)
         county     = random.choice(counties)
         city       = get_city_for_county(county)
-        segment    = weighted_choice(SEGMENT_WEIGHTS)
+        
+        # Segment si KYC strict din valorile existente in DB
+        segment    = random.choices(
+            valid_segments,
+            weights=[SEGMENT_WEIGHTS.get(s, 0.01) for s in valid_segments]
+        )[0]
         kyc_status = random.choices(
-            ["VERIFIED","PENDING","FLAGGED","BLOCKED"],
-            weights=[0.85, 0.10, 0.04, 0.01]
+            valid_kyc,
+            weights=[0.85 if s=="VERIFIED" else 0.10 if s=="PENDING" 
+                     else 0.04 if s=="FLAGGED" else 0.01 for s in valid_kyc]
         )[0]
         kyc_verified_at = (
             fake.date_time_between(start_date="-2y").isoformat()
             if kyc_status == "VERIFIED" else None
         )
 
-        # CNP unic
-        cnp = generate_cnp(datetime.combine(dob, datetime.min.time()), gender, county)
+        cnp = generate_cnp(
+            datetime.combine(dob, datetime.min.time()), gender, county
+        )
         attempts = 0
         while cnp in cnp_set and attempts < 10:
-            cnp = generate_cnp(datetime.combine(dob, datetime.min.time()), gender, county)
+            cnp = generate_cnp(
+                datetime.combine(dob, datetime.min.time()), gender, county
+            )
             attempts += 1
         cnp_set.add(cnp)
 
@@ -191,35 +212,21 @@ def generate_customers(conn, n=NUM_CUSTOMERS):
         last  = fake.last_name()
         email = f"{first.lower()}.{last.lower()}{i}@{fake.free_email_domain()}"
 
-        record = {
-            "customer_id"    : random_id("CUST", i),
-            "first_name"     : first,
-            "last_name"      : last,
-            "cnp"            : cnp,
-            "email"          : email,
-            "phone"          : f"07{random.randint(10000000,99999999)}",
-            "date_of_birth"  : dob.isoformat(),
-            "gender"         : gender,
-            "county_code"    : county,
-            "city"           : city,
-            "address"        : fake.street_address(),
-            "country_code"   : "RO",
-            "segment_code"   : segment,
-            "kyc_status"     : kyc_status,
-            "kyc_verified_at": kyc_verified_at,
-            "is_active"      : 1,
-        }
-
-        # Injectare erori intentionate
-        if random.random() < ERROR_RATES["technical"]:
-            record = inject_technical_error(record, "customers")
-        elif random.random() < ERROR_RATES["logical"]:
-            record = inject_logical_error(record, "customers")
-
-        # Eliminam campurile private (_error_*) inainte de INSERT in SQLite
-        # (acestea sunt doar pentru tracking in Python, nu exista in schema)
-        clean = {k: v for k, v in record.items() if not k.startswith("_")}
-        rows.append(tuple(clean.values()))
+        # Nu injectam erori de FK — le lasam doar pe cele de format
+        # (erorile de FK ar bloca INSERT-ul complet)
+        rows.append((
+            random_id("CUST", i),
+            first, last, cnp, email,
+            f"07{random.randint(10000000, 99999999)}",
+            dob.isoformat(), gender,
+            county, city,
+            fake.street_address(),
+            "RO",           # country_code — mereu valid
+            segment,
+            kyc_status,
+            kyc_verified_at,
+            1,
+        ))
 
     conn.executemany("""
         INSERT OR IGNORE INTO customers
@@ -232,7 +239,9 @@ def generate_customers(conn, n=NUM_CUSTOMERS):
 
     inserted = conn.execute("SELECT COUNT(*) FROM customers").fetchone()[0]
     logger.success(f"  {inserted} clienti in baza de date")
-    return [r[0] for r in conn.execute("SELECT customer_id FROM customers").fetchall()]
+    return [r[0] for r in conn.execute(
+        "SELECT customer_id FROM customers"
+    ).fetchall()]
 
 
 # ════════════════════════════════════════════════════════════
@@ -256,9 +265,10 @@ def generate_accounts(conn, customer_ids, branch_ids, n=NUM_ACCOUNTS):
             ["ACTIVE","FROZEN","BLOCKED","CLOSED"],
             weights=[0.90, 0.04, 0.03, 0.03]
         )[0]
-        open_date    = fake.date_between(start_date="-8y", end_date="-1m").isoformat()
+        open_date_obj = fake.date_between(start_date="-8y", end_date="-1m")
+        open_date    = open_date_obj.isoformat()
         close_date   = (
-            fake.date_between(start_date=open_date, end_date="today").isoformat()
+            fake.date_between(start_date=open_date_obj, end_date="today").isoformat()
             if status == "CLOSED" else None
         )
 
@@ -538,7 +548,10 @@ def generate_transactions(conn, account_ids, card_ids, employee_ids, n=NUM_TRANS
             orig["initiated_at"], orig["completed_at"],
         ))
 
-    # Insert in batch-uri de 1000
+    # FK dezactivat intentionat: randurile cu status_code/channel_code invalide
+    # (erori tehnice injectate) trebuie stocate ca date "murdare" in Bronze layer.
+    # Silver layer din Databricks le va detecta si carantina.
+    conn.execute("PRAGMA foreign_keys = OFF")
     batch_size = 1_000
     inserted   = 0
     for start in range(0, len(rows), batch_size):
@@ -556,6 +569,7 @@ def generate_transactions(conn, account_ids, card_ids, employee_ids, n=NUM_TRANS
             inserted += len(batch)
         except Exception as e:
             logger.warning(f"  Batch eroare: {e}")
+    conn.execute("PRAGMA foreign_keys = ON")
 
     total = conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
     logger.success(f"  {total} tranzactii in baza de date")
@@ -565,13 +579,22 @@ def generate_transactions(conn, account_ids, card_ids, employee_ids, n=NUM_TRANS
 # MAIN — orchestreaza generarea completa
 # ════════════════════════════════════════════════════════════
 def run_full_generation():
+    import os
+
+    conn = get_connection()
+
+    # Aplica schema si seed nomenclatoare (IF NOT EXISTS — sigur de rulat pe DB existenta)
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    conn.executescript(open(os.path.join(base_dir, "database", "schema.sql")).read())
+    conn.executescript(open(os.path.join(base_dir, "database", "seed_nomenclatoare.sql")).read())
+    logger.info("Schema si nomenclatoare verificate")
+
     logger.info("=" * 60)
     logger.info("START generare date bancare")
     logger.info(f"DB: {DB_PATH}")
     logger.info("=" * 60)
 
     start_time = datetime.now()
-    conn       = get_connection()
 
     # Verificam ca nomenclatoarele exista
     count = conn.execute("SELECT COUNT(*) FROM ref_countries").fetchone()[0]
@@ -599,6 +622,231 @@ def run_full_generation():
     logger.info("=" * 60)
     logger.success("Generare completa!")
     conn.close()
+
+
+# ════════════════════════════════════════════════════════════
+# UPDATE GENERATORS — simuleaza modificari pe entitati existente
+# ════════════════════════════════════════════════════════════
+
+def generate_customer_updates(conn):
+    """Aplica modificari realiste pe un subset de clienti existenti."""
+    logger.info("Actualizare clienti...")
+
+    valid_segments = [r[0] for r in conn.execute(
+        "SELECT segment_code FROM ref_customer_segments"
+    ).fetchall()]
+    valid_kyc = [r[0] for r in conn.execute(
+        "SELECT status_code FROM ref_kyc_statuses"
+    ).fetchall()]
+    counties = [r[0] for r in conn.execute(
+        "SELECT county_code FROM ref_counties WHERE is_active=1"
+    ).fetchall()]
+
+    customers = conn.execute(
+        "SELECT customer_id, segment_code, kyc_status FROM customers WHERE is_active=1"
+    ).fetchall()
+    if not customers:
+        logger.warning("  Nu exista clienti activi pentru actualizare")
+        return
+
+    n = max(1, int(len(customers) * UPDATE_RATES["customers"]))
+    to_update = random.sample(customers, min(n, len(customers)))
+
+    updated = 0
+    for cust in to_update:
+        change = random.choices(
+            ["segment", "kyc", "address", "deactivate"],
+            weights=[0.40, 0.35, 0.20, 0.05]
+        )[0]
+
+        if change == "segment":
+            other = [s for s in valid_segments if s != cust["segment_code"]]
+            if not other:
+                continue
+            conn.execute(
+                "UPDATE customers SET segment_code=? WHERE customer_id=?",
+                (random.choice(other), cust["customer_id"])
+            )
+        elif change == "kyc":
+            other = [s for s in valid_kyc if s != cust["kyc_status"]]
+            if not other:
+                continue
+            new_kyc = random.choice(other)
+            kyc_verified_at = datetime.now().isoformat() if new_kyc == "VERIFIED" else None
+            conn.execute(
+                "UPDATE customers SET kyc_status=?, kyc_verified_at=? WHERE customer_id=?",
+                (new_kyc, kyc_verified_at, cust["customer_id"])
+            )
+        elif change == "address":
+            county = random.choice(counties)
+            conn.execute(
+                "UPDATE customers SET county_code=?, city=?, address=? WHERE customer_id=?",
+                (county, get_city_for_county(county), fake.street_address(), cust["customer_id"])
+            )
+        elif change == "deactivate":
+            conn.execute(
+                "UPDATE customers SET is_active=0 WHERE customer_id=?",
+                (cust["customer_id"],)
+            )
+        updated += 1
+
+    conn.commit()
+    logger.success(f"  {updated} clienti actualizati")
+
+
+def generate_loan_updates(conn):
+    """Progreseaza statusul creditelor si reduce soldul pentru cele active."""
+    logger.info("Actualizare credite...")
+
+    loans = conn.execute("""
+        SELECT loan_id, status, outstanding_balance, monthly_payment, approved_by
+        FROM loans WHERE status NOT IN ('CLOSED','REJECTED')
+    """).fetchall()
+    if not loans:
+        logger.warning("  Nu exista credite eligibile pentru actualizare")
+        return
+
+    employee_ids = [r[0] for r in conn.execute(
+        "SELECT employee_id FROM employees WHERE status='ACTIVE'"
+    ).fetchall()]
+
+    n = max(1, int(len(loans) * UPDATE_RATES["loans"]))
+    to_update = random.sample(loans, min(n, len(loans)))
+
+    updated = 0
+    for loan in to_update:
+        options = LOAN_TRANSITIONS.get(loan["status"])
+        if not options:
+            continue
+
+        new_status = random.choices(
+            [t[0] for t in options],
+            weights=[t[1] for t in options]
+        )[0]
+
+        new_balance = loan["outstanding_balance"]
+        if new_status == "ACTIVE" and loan["status"] == "ACTIVE":
+            new_balance = max(0.0, round(
+                loan["outstanding_balance"] - loan["monthly_payment"] * random.uniform(0.9, 1.1), 2
+            ))
+            if new_balance == 0.0:
+                new_status = "CLOSED"
+        elif new_status == "CLOSED":
+            new_balance = 0.0
+
+        new_approved_by = loan["approved_by"]
+        new_approved_at = None
+        if loan["approved_by"] is None and new_status in ("APPROVED", "ACTIVE") and employee_ids:
+            new_approved_by = random.choice(employee_ids)
+            new_approved_at = datetime.now().isoformat()
+
+        if new_approved_at:
+            conn.execute(
+                "UPDATE loans SET status=?, outstanding_balance=?, approved_by=?, approved_at=? WHERE loan_id=?",
+                (new_status, new_balance, new_approved_by, new_approved_at, loan["loan_id"])
+            )
+        else:
+            conn.execute(
+                "UPDATE loans SET status=?, outstanding_balance=? WHERE loan_id=?",
+                (new_status, new_balance, loan["loan_id"])
+            )
+        updated += 1
+
+    conn.commit()
+    logger.success(f"  {updated} credite actualizate")
+
+
+def generate_card_updates(conn):
+    """Schimba statusul cardurilor si ajusteaza limitele de credit."""
+    logger.info("Actualizare carduri...")
+
+    cards = conn.execute("""
+        SELECT card_id, status, card_type_code, credit_limit, current_balance
+        FROM cards WHERE status != 'CANCELLED'
+    """).fetchall()
+    if not cards:
+        logger.warning("  Nu exista carduri eligibile pentru actualizare")
+        return
+
+    n = max(1, int(len(cards) * UPDATE_RATES["cards"]))
+    to_update = random.sample(cards, min(n, len(cards)))
+
+    updated = 0
+    for card in to_update:
+        options = CARD_TRANSITIONS.get(card["status"])
+        if not options:
+            continue
+
+        new_status = random.choices(
+            [t[0] for t in options],
+            weights=[t[1] for t in options]
+        )[0]
+
+        new_limit   = card["credit_limit"]
+        new_balance = card["current_balance"]
+
+        if (new_status == "ACTIVE" and card["status"] == "ACTIVE"
+                and card["card_type_code"] in ("CREDIT_VISA", "CREDIT_MC")
+                and random.random() < 0.30):
+            new_limit   = round(min(card["credit_limit"] * random.uniform(0.8, 1.5), 50_000.0), 2)
+            new_balance = min(card["current_balance"], new_limit)
+
+        conn.execute(
+            "UPDATE cards SET status=?, credit_limit=?, current_balance=? WHERE card_id=?",
+            (new_status, new_limit, new_balance, card["card_id"])
+        )
+        updated += 1
+
+    conn.commit()
+    logger.success(f"  {updated} carduri actualizate")
+
+
+def generate_account_updates(conn):
+    """Schimba statusul conturilor si aplica drift de sold simuland tranzactii agregate."""
+    logger.info("Actualizare conturi...")
+
+    accounts = conn.execute("""
+        SELECT account_id, status, balance, available_balance, account_type
+        FROM accounts WHERE status != 'CLOSED'
+    """).fetchall()
+    if not accounts:
+        logger.warning("  Nu exista conturi eligibile pentru actualizare")
+        return
+
+    n = max(1, int(len(accounts) * UPDATE_RATES.get("accounts", 0.04)))
+    to_update = random.sample(accounts, min(n, len(accounts)))
+
+    updated = 0
+    for acc in to_update:
+        options = ACCOUNT_TRANSITIONS.get(acc["status"])
+        if not options:
+            continue
+
+        new_status = random.choices(
+            [t[0] for t in options],
+            weights=[t[1] for t in options]
+        )[0]
+
+        new_balance   = acc["balance"]
+        new_available = acc["available_balance"]
+
+        if new_status == "ACTIVE" and acc["status"] == "ACTIVE":
+            # Drift de sold: simuleaza efectul net al tranzactiilor din batch
+            drift = round(random.uniform(-2_000, 2_000), 2)
+            new_balance   = max(0.0, round(acc["balance"] + drift, 2))
+            new_available = round(new_balance * random.uniform(0.85, 1.0), 2)
+        elif new_status == "CLOSED":
+            new_balance   = 0.0
+            new_available = 0.0
+
+        conn.execute(
+            "UPDATE accounts SET status=?, balance=?, available_balance=? WHERE account_id=?",
+            (new_status, new_balance, new_available, acc["account_id"])
+        )
+        updated += 1
+
+    conn.commit()
+    logger.success(f"  {updated} conturi actualizate")
 
 
 # ════════════════════════════════════════════════════════════
@@ -654,6 +902,12 @@ def run_batch_generation(n_transactions=SCHEDULER_BATCH_TRANSACTIONS):
     conn.commit()
     total = conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
     logger.info(f"Batch: +{n_transactions} tranzactii | Total: {total}")
+
+    generate_customer_updates(conn)
+    generate_loan_updates(conn)
+    generate_card_updates(conn)
+    generate_account_updates(conn)
+
     conn.close()
 
 
