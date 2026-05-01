@@ -310,19 +310,31 @@ def generate_cards(conn, account_ids, employee_ids, n=NUM_CARDS):
     card_types = ["DEBIT_VISA","DEBIT_MC","CREDIT_VISA","CREDIT_MC","PREPAID_VISA","VIRTUAL_MC"]
     card_w     = [0.30, 0.30, 0.18, 0.12, 0.07, 0.03]
     rows       = []
+    today      = datetime.now().date()
 
     for i in range(1, n + 1):
         account_id  = random.choice(eligible_accounts)
         card_type   = random.choices(card_types, weights=card_w)[0]
         issued_date = fake.date_between(start_date="-5y", end_date="-1m")
-        expiry_date = (issued_date + timedelta(days=365*3)).strftime("%Y-%m")
+        expiry_date_obj = issued_date + timedelta(days=365*3)
+        expiry_date = expiry_date_obj.strftime("%Y-%m")
         has_credit  = card_type in ("CREDIT_VISA","CREDIT_MC")
         credit_limit = round(random.uniform(1000, 15000), 2) if has_credit else 0.0
         curr_balance = round(credit_limit * random.uniform(0, 0.7), 2) if has_credit else 0.0
-        status = random.choices(
-            ["ACTIVE","BLOCKED","EXPIRED","CANCELLED"],
-            weights=[0.85, 0.07, 0.05, 0.03]
-        )[0]
+
+        # Status determinat coerent cu expiry_date:
+        # - card legitim expirat → EXPIRED sau CANCELLED
+        # - card valid → distributie obisnuita pentru carduri active
+        if expiry_date_obj < today:
+            status = random.choices(
+                ["EXPIRED", "CANCELLED"],
+                weights=[0.80, 0.20]
+            )[0]
+        else:
+            status = random.choices(
+                ["ACTIVE", "BLOCKED", "CANCELLED"],
+                weights=[0.92, 0.06, 0.02]
+            )[0]
 
         record = {
             "card_id"            : random_id("CARD", i),
@@ -337,7 +349,7 @@ def generate_cards(conn, account_ids, employee_ids, n=NUM_CARDS):
             "issued_by"          : random.choice(employee_ids),
         }
 
-        # Injectare erori logice pe carduri
+        # Injectare erori logice pe carduri (ramane la ~3% pentru demo Silver quarantine)
         if random.random() < ERROR_RATES["logical"]:
             record = inject_logical_error(record, "cards")
 
@@ -580,6 +592,11 @@ def generate_transactions(conn, account_ids, card_ids, employee_ids, n=NUM_TRANS
 # ════════════════════════════════════════════════════════════
 def run_full_generation():
     import os
+    
+    # Sterge DB existenta si o recreaza curat
+    if os.path.exists(DB_PATH):
+        os.remove(DB_PATH)
+        logger.info("DB existenta stearsa — recreare curata")
 
     conn = get_connection()
 
@@ -587,7 +604,7 @@ def run_full_generation():
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     conn.executescript(open(os.path.join(base_dir, "database", "schema.sql")).read())
     conn.executescript(open(os.path.join(base_dir, "database", "seed_nomenclatoare.sql")).read())
-    logger.info("Schema si nomenclatoare verificate")
+    logger.info("Schema si nomenclatoare reaplicate")
 
     logger.info("=" * 60)
     logger.info("START generare date bancare")
