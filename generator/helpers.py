@@ -11,17 +11,24 @@ from faker import Faker
 fake = Faker("ro_RO")
 
 # ── Judete Romania cu codul de judet din CNP ─────────────────
+# Sursa: standardul oficial ANAF — ordinea alfabetica a denumirilor
+# 01-39 = judete istorice, 40 = Bucuresti (general), 41-46 = sectoare 1-6,
+# 51 = Calarasi, 52 = Giurgiu (judete create dupa 1981)
 COUNTY_CNP_CODES = {
     "AB": "01", "AR": "02", "AG": "03", "BC": "04", "BH": "05",
-    "BN": "06", "BT": "07", "BV": "08", "BR": "09", "B" : "10",
-    "BZ": "11", "CS": "12", "CL": "51", "CJ": "13", "CT": "14",
-    "CV": "15", "DB": "16", "DJ": "17", "GL": "18", "GR": "52",
-    "GJ": "19", "HR": "20", "HD": "21", "IL": "22", "IS": "23",
-    "IF": "24", "MM": "25", "MH": "26", "MS": "27", "NT": "28",
-    "OT": "29", "PH": "30", "SM": "31", "SJ": "32", "SB": "33",
-    "SV": "34", "TR": "35", "TM": "36", "TL": "37", "VS": "38",
-    "VL": "39", "VN": "40",
+    "BN": "06", "BT": "07", "BV": "08", "BR": "09", "BZ": "10",
+    "CS": "11", "CJ": "12", "CT": "13", "CV": "14", "DB": "15",
+    "DJ": "16", "GL": "17", "GJ": "18", "HR": "19", "HD": "20",
+    "IL": "21", "IS": "22", "IF": "23", "MM": "24", "MH": "25",
+    "MS": "26", "NT": "27", "OT": "28", "PH": "29", "SM": "30",
+    "SJ": "31", "SB": "32", "SV": "33", "TR": "34", "TM": "35",
+    "TL": "36", "VS": "37", "VL": "38", "VN": "39",
+    "B" : "41",  # Bucuresti — sector 1 (placeholder; randomizat in generate_cnp)
+    "CL": "51", "GR": "52",
 }
+
+# Sectoarele Bucurestiului (41-46) — pentru randomizarea CNP-urilor din B
+BUCURESTI_SECTOR_CODES = ["41", "42", "43", "44", "45", "46"]
 
 # ── Orase principale per judet ───────────────────────────────
 COUNTY_CITIES = {
@@ -73,7 +80,11 @@ def generate_cnp(date_of_birth: datetime, gender: str, county_code: str) -> str:
     aa  = str(year)[-2:]
     ll  = f"{month:02d}"
     zz  = f"{day:02d}"
-    jj  = COUNTY_CNP_CODES.get(county_code, "10")
+    # Bucurestiul foloseste codurile 41-46 (un cod per sector) — randomizam intre sectoare
+    if county_code == "B":
+        jj = random.choice(BUCURESTI_SECTOR_CODES)
+    else:
+        jj = COUNTY_CNP_CODES.get(county_code, "01")
     nnn = f"{random.randint(1, 999):03d}"
 
     partial = s + aa + ll + zz + jj + nnn
