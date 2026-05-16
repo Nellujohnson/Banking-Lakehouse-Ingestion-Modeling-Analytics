@@ -120,15 +120,15 @@ LOAN_STATUS_WEIGHTS = {
 # ── Profile sume tranzactii (log-normala) ────────────────────
 # (mean, sigma) pentru numpy lognormal — in RON
 AMOUNT_PROFILES = {
-    "POS"            : (5.0, 1.2),   # majority 50-500 RON
-    "ATM_WITHDRAWAL" : (5.5, 0.8),   # majority 100-500 RON
-    "TRANSFER_OUT"   : (6.5, 1.5),   # wider range
+    "POS"            : (5.0, 1.2),
+    "ATM_WITHDRAWAL" : (5.5, 0.8),
+    "TRANSFER_OUT"   : (6.5, 1.5), 
     "PAYMENT"        : (5.8, 1.0),
-    "LOAN_REPAYMENT" : (7.0, 0.5),   # consistent amounts
+    "LOAN_REPAYMENT" : (7.0, 0.5),
     "DEFAULT"        : (5.2, 1.3),
 }
 
-# ── Profil orar tranzactii (pondere per ora 0-23) ────────────
+# ── Profil orar tranzactii (pondere per ora 00-23) ────────────
 HOURLY_WEIGHTS = [
     0.5, 0.3, 0.2, 0.1, 0.1, 0.2,   # 00-05 (noapte, minim)
     0.5, 1.5, 3.0, 4.5, 4.0, 3.5,   # 06-11 (dimineata, varf)

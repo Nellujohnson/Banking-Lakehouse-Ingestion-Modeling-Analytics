@@ -21,7 +21,7 @@ from loguru import logger
 
 from config  import *
 from helpers import (
-    generate_cnp, generate_iban, generate_card_number_masked,
+    generate_cnp, generate_iban, generate_card_number,
     generate_amount, generate_timestamp, weighted_choice,
     random_id, random_reference_code, compute_amount_ron,
     random_salary_for_role, inject_technical_error, inject_logical_error,
@@ -340,7 +340,7 @@ def generate_cards(conn, account_ids, employee_ids, n=NUM_CARDS):
             "card_id"            : random_id("CARD", i),
             "account_id"         : account_id,
             "card_type_code"     : card_type,
-            "card_number_masked" : generate_card_number_masked(),
+            "card_number_masked" : generate_card_number(),
             "expiry_date"        : expiry_date,
             "credit_limit"       : credit_limit,
             "current_balance"    : curr_balance,

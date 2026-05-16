@@ -109,10 +109,24 @@ def generate_iban(branch_id: str, account_index: int) -> str:
     return iban
 
 
-def generate_card_number_masked() -> str:
-    """Genereaza un numar de card mascat: **** **** **** XXXX"""
-    last_four = f"{random.randint(1000, 9999)}"
-    return f"**** **** **** {last_four}"
+def generate_card_number(card_brand='visa'):
+    # Prefix conform standardelor ISO 7812
+    prefix = '4' if card_brand == 'visa' else str(random.randint(51, 55))
+    # Generare primele 15 cifre (prefix + random)
+    digits = prefix + ''.join(
+        str(random.randint(0, 9))
+        for _ in range(15 - len(prefix))
+    )
+    # Calcul cifra de control Luhn
+    total = 0
+    for i, d in enumerate(reversed(digits)):
+        n = int(d)
+        if i % 2 == 0:
+            n *= 2
+            if n > 9: n -= 9
+        total += n
+    check = (10 - (total % 10)) % 10
+    return digits + str(check)
 
 
 def generate_amount(type_code: str, profiles: dict) -> float:
